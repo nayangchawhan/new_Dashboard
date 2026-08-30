@@ -12,9 +12,8 @@ const isGroqKey = API_KEY.startsWith('gsk_');
 
 const API_URL = process.env.GROQ_API_URL || process.env.GROK_API_URL || (isGroqKey ? 'https://api.groq.com/openai/v1/chat/completions' : 'https://api.x.ai/v1/chat/completions');
 const PRIMARY_MODEL = process.env.GROQ_MODEL || process.env.GROK_MODEL || (isGroqKey ? 'openai/gpt-oss-120b' : 'grok-beta');
-
 const FALLBACK_MODELS = isGroqKey 
-  ? [PRIMARY_MODEL, 'openai/gpt-oss-20b', 'groq/compound', 'qwen/qwen3.6-27b'].filter((v, i, a) => a.indexOf(v) === i)
+  ? [PRIMARY_MODEL, 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'qwen/qwen3.6-27b', 'groq/compound'].filter((v, i, a) => a.indexOf(v) === i)
   : [PRIMARY_MODEL];
 
 /**
@@ -310,7 +309,9 @@ export async function askGrok(userMessage, conversationHistory = []) {
   if (!API_KEY) {
     const answer = localSmartAnswer(userMessage, snapshot, weather, executedActions);
     return {
+      reply: answer,
       message: answer,
+      content: answer,
       contextSnapshot: snapshot,
       executedActions,
       source: 'orbit-ai'
@@ -355,7 +356,9 @@ export async function askGrok(userMessage, conversationHistory = []) {
         aiMessage = aiMessage.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
         return {
+          reply: aiMessage,
           message: aiMessage,
+          content: aiMessage,
           contextSnapshot: snapshot,
           executedActions,
           source: 'orbit-ai',
@@ -371,7 +374,9 @@ export async function askGrok(userMessage, conversationHistory = []) {
   console.warn('[OrbitAI] All online models failed or timed out, using local fallback.');
   const fallbackAnswer = localSmartAnswer(userMessage, snapshot, weather, executedActions);
   return {
+    reply: fallbackAnswer,
     message: fallbackAnswer,
+    content: fallbackAnswer,
     contextSnapshot: snapshot,
     executedActions,
     source: 'orbit-ai'

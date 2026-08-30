@@ -177,16 +177,18 @@ export default function ChatbotPage({ telemetry = {} }) {
 
       const data = await sendChatMessage(textToSend.trim(), historyPayload);
 
+      const replyText = data.reply || data.message || data.content || (typeof data === 'string' ? data : 'No response received.');
+
       const assistantMessage = {
         role: 'assistant',
-        content: data.reply || 'No response received.',
+        content: replyText,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        source: data.source || 'Orbit AI',
+        source: data.source || data.model || 'Orbit AI',
         executedActions: data.executedActions || []
       };
 
       setMessages(prev => [...prev, assistantMessage]);
-      speakText(data.reply || '');
+      speakText(replyText);
     } catch (err) {
       setMessages(prev => [
         ...prev,
