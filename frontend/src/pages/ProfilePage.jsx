@@ -290,7 +290,7 @@ export default function ProfilePage({
   const avatarOptions = ['👨‍💼', '👩‍💼', '🧑‍💻', '🏠', '⚡', '🛡️', '👑', '🌟'];
 
   return (
-    <div style={{ maxWidth: '1040px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <div className="profile-page-container">
       {/* Profile Header Hero Card */}
       <div className="card profile-hero-card">
         <div className="profile-hero-content">
@@ -547,7 +547,7 @@ export default function ProfilePage({
                 <label className="form-label">
                   City / State & Country
                 </label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div className="city-country-row">
                   <input
                     type="text"
                     className="profile-input"
@@ -594,7 +594,7 @@ export default function ProfilePage({
             </div>
           </div>
 
-          {/* Section 3: Safety Thresholds & Automated Triggers */}
+          {/* Section 3: Safety Triggers & Multi-Sensors */}
           <div className="profile-section-block">
             <h4 className="profile-section-title">
               <Thermometer size={16} /> 3. Multi-Sensor Safety Triggers & Thresholds
@@ -614,7 +614,7 @@ export default function ProfilePage({
                 </span>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '12px' }}>
+              <div className="threshold-slider-row">
                 <input
                   type="range"
                   min="20"
@@ -642,7 +642,7 @@ export default function ProfilePage({
             </div>
 
             {/* Secondary Thresholds Grid */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px', marginTop: '14px' }}>
+            <div className="secondary-thresholds-grid">
               <div style={{ background: '#f0f9ff', padding: '14px', borderRadius: '12px', border: '1px solid #bae6fd' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 700, color: '#0369a1' }}>
                   <Thermometer size={16} /> Low Temperature Alert
@@ -989,7 +989,7 @@ export default function ProfilePage({
                     />
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div className="modal-split-row">
                     <div className="form-group">
                       <label className="form-label">Access Role</label>
                       <select
@@ -1028,7 +1028,7 @@ export default function ProfilePage({
                         Select the dashboard sections and administrative controls permitted for this family member:
                       </div>
 
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '4px' }}>
+                      <div className="family-permissions-grid">
                         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
                           <input
                             type="checkbox"
