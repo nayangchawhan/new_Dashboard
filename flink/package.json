@@ -1,0 +1,8 @@
+{
+  "name": "orbit-flink-analytics",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/flink_analytics.test.js"
+  }
+}
