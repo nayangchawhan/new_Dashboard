@@ -19,7 +19,9 @@ import {
   getStoredActiveDevice,
   switchActiveDevice,
   clearStoredActiveDevice,
-  subscribeUserProfile
+  subscribeUserProfile,
+  toggleLight,
+  toggleSafeMode
 } from './services/firebase';
 import { sendTemperatureAlertEmail } from './services/emailService';
 import { detectSuddenSpike, compute5mWindowMetrics } from './services/streamAnalytics';
@@ -95,6 +97,12 @@ export default function App() {
   const lastSpikeTsRef = useRef({
     temp: 0,
     humidity: 0
+  });
+
+  // Autonomous Thermal Actuation Flags (Temp > 35°C => Safe Mode ON, Temp > 30°C => Light 1 ON)
+  const autoThermalStateRef = useRef({
+    safeModeAutoTriggered: false,
+    light1AutoTriggered: false
   });
 
   const notify = (message, type = 'info') => {
@@ -238,6 +246,67 @@ export default function App() {
           emailSentRef.current.temp = true;
         } else if (numVal !== null && numVal <= (currentThreshold - 1.0)) {
           emailSentRef.current.temp = false;
+        }
+
+        // =========================================================================
+        // AUTONOMOUS THERMAL RULES:
+        // Rule 1: Temp > 35°C => Auto Turn ON Safe Mode, <= 35°C => Auto Turn OFF
+        // Rule 2: Temp > 30°C => Auto Turn ON Light 1, <= 30°C => Auto Turn OFF
+        // =========================================================================
+        if (numVal !== null && !isNaN(numVal)) {
+          // Rule 1: Safe Mode (Threshold: 35.0°C)
+          if (numVal > 35.0) {
+            setTelemetry(curr => {
+              if (!curr.safeMode && !autoThermalStateRef.current.safeModeAutoTriggered) {
+                autoThermalStateRef.current.safeModeAutoTriggered = true;
+                toggleSafeMode(true, { name: 'Thermal Safety Engine', role: 'System Automation', type: 'system' })
+                  .then(() => {
+                    notify(`🔒 Critical Temperature ${numVal}°C > 35°C: Auto-Activated Safe Mode (Master Switch Locked)!`, 'danger');
+                  })
+                  .catch(err => console.warn('[AutoSafeMode] Error:', err));
+              }
+              return curr;
+            });
+          } else if (numVal <= 35.0) {
+            setTelemetry(curr => {
+              if (curr.safeMode && autoThermalStateRef.current.safeModeAutoTriggered) {
+                autoThermalStateRef.current.safeModeAutoTriggered = false;
+                toggleSafeMode(false, { name: 'Thermal Safety Engine', role: 'System Automation', type: 'system' })
+                  .then(() => {
+                    notify(`🔓 Temperature normalized (${numVal}°C <= 35°C): Auto-Disabled Safe Mode (Unlocked).`, 'success');
+                  })
+                  .catch(err => console.warn('[AutoSafeMode] Error:', err));
+              }
+              return curr;
+            });
+          }
+
+          // Rule 2: Light 1 (Threshold: 30.0°C)
+          if (numVal > 30.0) {
+            setTelemetry(curr => {
+              if (!curr.light1 && !autoThermalStateRef.current.light1AutoTriggered) {
+                autoThermalStateRef.current.light1AutoTriggered = true;
+                toggleLight(1, true, { name: 'Thermal Indicator Engine', role: 'System Automation', type: 'system' })
+                  .then(() => {
+                    notify(`💡 Temperature ${numVal}°C > 30°C: Auto-Switched ON Light 1!`, 'warning');
+                  })
+                  .catch(err => console.warn('[AutoLight1] Error:', err));
+              }
+              return curr;
+            });
+          } else if (numVal <= 30.0) {
+            setTelemetry(curr => {
+              if (curr.light1 && autoThermalStateRef.current.light1AutoTriggered) {
+                autoThermalStateRef.current.light1AutoTriggered = false;
+                toggleLight(1, false, { name: 'Thermal Indicator Engine', role: 'System Automation', type: 'system' })
+                  .then(() => {
+                    notify(`💡 Temperature normalized (${numVal}°C <= 30°C): Auto-Switched OFF Light 1.`, 'info');
+                  })
+                  .catch(err => console.warn('[AutoLight1] Error:', err));
+              }
+              return curr;
+            });
+          }
         }
       }
     });

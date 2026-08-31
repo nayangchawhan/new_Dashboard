@@ -6,6 +6,7 @@ import healthRouter from './routes/health.js';
 import telemetryRouter from './routes/telemetry.js';
 import analyticsRouter from './routes/analytics.js';
 import { initKafka } from './services/kafkaService.js';
+import { startThermalAutomationService } from './services/automationService.js';
 
 dotenv.config();
 
@@ -65,6 +66,9 @@ const server = app.listen(PORT, () => {
       console.log('ℹ️  Kafka running in in-memory event mode.');
     }
   });
+
+  // Start Autonomous Thermal Rules Service (>35°C Safe Mode, >30°C Light 1)
+  startThermalAutomationService(4000);
 });
 
 // Handle server startup errors (e.g. port already in use)
