@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { compute5mWindowMetrics } from '../services/streamAnalytics';
 import MetricDetailModal from '../components/MetricDetailModal';
+import SensorSpikeFeed from '../components/SensorSpikeFeed';
 
 // Register ChartJS modules
 ChartJS.register(
@@ -259,25 +260,15 @@ export default function AnalyticsPage({ history, analytics, spikeAlerts = [], te
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      {/* Sudden Spike Alert Notifications Banner (if active spikes detected) */}
-      {spikeAlerts && spikeAlerts.length > 0 && (
-        <div className="spike-alerts-container">
-          <div className="spike-alerts-header">
-            <Zap size={18} className="spike-flash-icon" />
-            <span className="spike-alerts-title">Real-Time Sensor Spike Anomaly Feed</span>
-          </div>
-          <div className="spike-alerts-list">
-            {spikeAlerts.slice(-3).reverse().map((spike, idx) => (
-              <div key={idx} className="spike-alert-chip">
-                <span className="spike-time">{spike.timeStr || 'Now'}</span>
-                <span className="spike-body">{spike.message}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* 1. Real-Time Sensor Spike Anomaly Feed & Intelligent Thermal Guidance */}
+      <SensorSpikeFeed
+        spikeAlerts={spikeAlerts}
+        telemetry={telemetry}
+        analytics={analytics}
+        history={history}
+      />
 
-      {/* Apache Flink Stream Engine Banner: 5-Minute Window Real-Time Analytics */}
+      {/* 2. Apache Flink Stream Engine Banner: 5-Minute Window Real-Time Analytics */}
       <div style={{
         background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #9333ea 100%)',
         color: 'white',

@@ -24,7 +24,7 @@ import {
   toggleSafeMode
 } from './services/firebase';
 import { sendTemperatureAlertEmail } from './services/emailService';
-import { detectSuddenSpike, compute5mWindowMetrics } from './services/streamAnalytics';
+import { detectSuddenSpike, compute5mWindowMetrics, extractHistoricalSpikes } from './services/streamAnalytics';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -104,6 +104,12 @@ export default function App() {
     safeModeAutoTriggered: false,
     light1AutoTriggered: false
   });
+
+  // Direct synchronous reference to latest telemetry state for real-time automation
+  const telemetryRef = useRef(telemetry);
+  useEffect(() => {
+    telemetryRef.current = telemetry;
+  }, [telemetry]);
 
   const notify = (message, type = 'info') => {
     setNotification({ message, type });
@@ -186,6 +192,36 @@ export default function App() {
     return () => unsubProfile();
   }, [currentDevice]);
 
+  // Synchronize past historical anomaly events from telemetry points on load/reconnect
+  useEffect(() => {
+    const tempPoints = history?.tempHistory?.allPoints || history?.tempHistory?.points || [];
+    const humPoints = history?.humHistory?.allPoints || history?.humHistory?.points || [];
+    const hubPoints = history?.pitempHistory?.allPoints || history?.pitempHistory?.points || [];
+
+    if (tempPoints.length >= 2 || humPoints.length >= 2 || hubPoints.length >= 2) {
+      const pastTemp = extractHistoricalSpikes(tempPoints, 'temperature');
+      const pastHum = extractHistoricalSpikes(humPoints, 'humidity');
+      const pastHub = extractHistoricalSpikes(hubPoints, 'hubTemp');
+
+      const allPastSpikes = [...pastTemp, ...pastHum, ...pastHub]
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+        .slice(0, 25);
+
+      if (allPastSpikes.length > 0) {
+        setSpikeAlerts(prev => {
+          const existingKeys = new Set(prev.map(s => (s.timeStr || '') + s.message));
+          const newEntries = allPastSpikes.filter(s => !existingKeys.has((s.timeStr || '') + s.message));
+          if (newEntries.length === 0) return prev;
+          return [...prev, ...newEntries].slice(0, 25);
+        });
+      }
+    }
+  }, [
+    history.tempHistory.points.length,
+    history.humHistory.points.length,
+    history.pitempHistory.points.length
+  ]);
+
   useEffect(() => {
     if (!currentDevice) return;
 
@@ -249,63 +285,56 @@ export default function App() {
         }
 
         // =========================================================================
-        // AUTONOMOUS THERMAL RULES:
+        // AUTONOMOUS SIMULTANEOUS THERMAL RULES:
         // Rule 1: Temp > 35°C => Auto Turn ON Safe Mode, <= 35°C => Auto Turn OFF
         // Rule 2: Temp > 30°C => Auto Turn ON Light 1, <= 30°C => Auto Turn OFF
+        // Both rules execute simultaneously and independently.
         // =========================================================================
         if (numVal !== null && !isNaN(numVal)) {
-          // Rule 1: Safe Mode (Threshold: 35.0°C)
+          // --- RULE 1: SAFE MODE (Threshold: 35.0°C) ---
           if (numVal > 35.0) {
-            setTelemetry(curr => {
-              if (!curr.safeMode && !autoThermalStateRef.current.safeModeAutoTriggered) {
-                autoThermalStateRef.current.safeModeAutoTriggered = true;
-                toggleSafeMode(true, { name: 'Thermal Safety Engine', role: 'System Automation', type: 'system' })
-                  .then(() => {
-                    notify(`🔒 Critical Temperature ${numVal}°C > 35°C: Auto-Activated Safe Mode (Master Switch Locked)!`, 'danger');
-                  })
-                  .catch(err => console.warn('[AutoSafeMode] Error:', err));
-              }
-              return curr;
-            });
+            autoThermalStateRef.current.safeModeAutoTriggered = true;
+            if (!telemetryRef.current.safeMode) {
+              console.log(`[AutoThermal] 🔒 Temp ${numVal}°C > 35°C: Actuating Safe Mode ON...`);
+              toggleSafeMode(true, { name: 'Thermal Safety Engine', role: 'System Automation', type: 'system' })
+                .then(() => {
+                  notify(`🔒 Critical Temperature ${numVal}°C > 35°C: Auto-Activated Safe Mode (Master Switch Locked)!`, 'danger');
+                })
+                .catch(err => console.warn('[AutoSafeMode] Error:', err));
+            }
           } else if (numVal <= 35.0) {
-            setTelemetry(curr => {
-              if (curr.safeMode && autoThermalStateRef.current.safeModeAutoTriggered) {
-                autoThermalStateRef.current.safeModeAutoTriggered = false;
-                toggleSafeMode(false, { name: 'Thermal Safety Engine', role: 'System Automation', type: 'system' })
-                  .then(() => {
-                    notify(`🔓 Temperature normalized (${numVal}°C <= 35°C): Auto-Disabled Safe Mode (Unlocked).`, 'success');
-                  })
-                  .catch(err => console.warn('[AutoSafeMode] Error:', err));
-              }
-              return curr;
-            });
+            if (telemetryRef.current.safeMode && autoThermalStateRef.current.safeModeAutoTriggered) {
+              console.log(`[AutoThermal] 🔓 Temp ${numVal}°C <= 35°C: Actuating Safe Mode OFF...`);
+              autoThermalStateRef.current.safeModeAutoTriggered = false;
+              toggleSafeMode(false, { name: 'Thermal Safety Engine', role: 'System Automation', type: 'system' })
+                .then(() => {
+                  notify(`🔓 Temperature normalized (${numVal}°C <= 35°C): Auto-Disabled Safe Mode (Unlocked).`, 'success');
+                })
+                .catch(err => console.warn('[AutoSafeMode] Error:', err));
+            }
           }
 
-          // Rule 2: Light 1 (Threshold: 30.0°C)
+          // --- RULE 2: LIGHT 1 (Threshold: 30.0°C) ---
           if (numVal > 30.0) {
-            setTelemetry(curr => {
-              if (!curr.light1 && !autoThermalStateRef.current.light1AutoTriggered) {
-                autoThermalStateRef.current.light1AutoTriggered = true;
-                toggleLight(1, true, { name: 'Thermal Indicator Engine', role: 'System Automation', type: 'system' })
-                  .then(() => {
-                    notify(`💡 Temperature ${numVal}°C > 30°C: Auto-Switched ON Light 1!`, 'warning');
-                  })
-                  .catch(err => console.warn('[AutoLight1] Error:', err));
-              }
-              return curr;
-            });
+            autoThermalStateRef.current.light1AutoTriggered = true;
+            if (!telemetryRef.current.light1) {
+              console.log(`[AutoThermal] 💡 Temp ${numVal}°C > 30°C: Actuating Light 1 ON...`);
+              toggleLight(1, true, { name: 'Thermal Indicator Engine', role: 'System Automation', type: 'system' })
+                .then(() => {
+                  notify(`💡 Temperature ${numVal}°C > 30°C: Auto-Switched ON Light 1!`, 'warning');
+                })
+                .catch(err => console.warn('[AutoLight1] Error:', err));
+            }
           } else if (numVal <= 30.0) {
-            setTelemetry(curr => {
-              if (curr.light1 && autoThermalStateRef.current.light1AutoTriggered) {
-                autoThermalStateRef.current.light1AutoTriggered = false;
-                toggleLight(1, false, { name: 'Thermal Indicator Engine', role: 'System Automation', type: 'system' })
-                  .then(() => {
-                    notify(`💡 Temperature normalized (${numVal}°C <= 30°C): Auto-Switched OFF Light 1.`, 'info');
-                  })
-                  .catch(err => console.warn('[AutoLight1] Error:', err));
-              }
-              return curr;
-            });
+            if (telemetryRef.current.light1 && autoThermalStateRef.current.light1AutoTriggered) {
+              console.log(`[AutoThermal] 💡 Temp ${numVal}°C <= 30°C: Actuating Light 1 OFF...`);
+              autoThermalStateRef.current.light1AutoTriggered = false;
+              toggleLight(1, false, { name: 'Thermal Indicator Engine', role: 'System Automation', type: 'system' })
+                .then(() => {
+                  notify(`💡 Temperature normalized (${numVal}°C <= 30°C): Auto-Switched OFF Light 1.`, 'info');
+                })
+                .catch(err => console.warn('[AutoLight1] Error:', err));
+            }
           }
         }
       }
@@ -419,6 +448,7 @@ export default function App() {
         const val = extractLatest(data);
         const isLightOn = val === 1 || val === true || val === '1' || val === 'on' || val === 'ON';
         const extracted = extractHistory(data, 100);
+        telemetryRef.current = { ...telemetryRef.current, light1: isLightOn };
         setTelemetry(prev => ({ ...prev, light1: isLightOn }));
         setHistory(prev => ({ ...prev, light1History: extracted }));
       }
@@ -431,6 +461,7 @@ export default function App() {
         const val = extractLatest(data);
         const isLightOn = val === 1 || val === true || val === '1' || val === 'on' || val === 'ON';
         const extracted = extractHistory(data, 100);
+        telemetryRef.current = { ...telemetryRef.current, light2: isLightOn };
         setTelemetry(prev => ({ ...prev, light2: isLightOn }));
         setHistory(prev => ({ ...prev, light2History: extracted }));
       }
@@ -443,6 +474,7 @@ export default function App() {
         const val = extractLatest(data);
         const isLightOn = val === 1 || val === true || val === '1' || val === 'on' || val === 'ON';
         const extracted = extractHistory(data, 100);
+        telemetryRef.current = { ...telemetryRef.current, light3: isLightOn };
         setTelemetry(prev => ({ ...prev, light3: isLightOn }));
         setHistory(prev => ({ ...prev, light3History: extracted }));
       }
@@ -452,7 +484,9 @@ export default function App() {
     const unsubMaster = onValue(masterRef, (snapshot) => {
       if (snapshot.exists()) {
         const val = extractLatest(snapshot.val());
-        setTelemetry(prev => ({ ...prev, safeMode: val === 1 || val === true || val === '1' || val === 'on' || val === 'ON' }));
+        const isSafeModeOn = val === 1 || val === true || val === '1' || val === 'on' || val === 'ON';
+        telemetryRef.current = { ...telemetryRef.current, safeMode: isSafeModeOn };
+        setTelemetry(prev => ({ ...prev, safeMode: isSafeModeOn }));
       }
     });
 

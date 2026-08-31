@@ -39,10 +39,10 @@ export async function evaluateThermalAutomation() {
     // RULE 1: Safe Mode (Threshold: 35.0°C)
     // -------------------------------------------------------------
     if (temp > 35.0) {
+      autoTriggerState.safeModeAutoOn = true;
       if (!isSafeModeOn) {
         console.log(`[ThermalAutomation] 🔒 Temp ${temp}°C > 35°C: Auto-Enabling Safe Mode (Master Switch ON)...`);
         await pushFirebaseNode('masterSwitch', 1);
-        autoTriggerState.safeModeAutoOn = true;
 
         await emitEvent('orbit.devices', {
           type: 'device_toggle',
@@ -100,10 +100,10 @@ export async function evaluateThermalAutomation() {
     // RULE 2: Light 1 (Threshold: 30.0°C)
     // -------------------------------------------------------------
     if (temp > 30.0) {
+      autoTriggerState.light1AutoOn = true;
       if (!isLight1On) {
         console.log(`[ThermalAutomation] 💡 Temp ${temp}°C > 30°C: Auto-Switching ON Light 1...`);
         await pushFirebaseNode('light1', 1);
-        autoTriggerState.light1AutoOn = true;
 
         await emitEvent('orbit.devices', {
           type: 'device_toggle',

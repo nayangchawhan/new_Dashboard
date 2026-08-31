@@ -382,3 +382,244 @@ export async function askGrok(userMessage, conversationHistory = []) {
     source: 'orbit-ai'
   };
 }
+
+/**
+ * AI-Powered Thermal Hazard Diagnostic Engine (Groq LLM + Heuristics)
+ * Evaluates whether temperature rise is a normal transient spike (1-2 intervals) or an urgent fire/overheat hazard.
+ */
+export async function diagnoseThermalHazard(payload = {}) {
+  const {
+    temperature = 28.5,
+    humidity = 60.0,
+    hubTemp = 48.0,
+    consecutiveRiseCount = 1,
+    delta5m = 0.5,
+    recentHistory = [],
+    safeMode = false,
+    light1 = false
+  } = payload;
+
+  // Local Rule-Based Diagnostic Baseline
+  let riskLevel = 'LOW';
+  let category = 'NORMAL_TRANSIENT';
+  let probability = 6;
+  let summary = 'Normal transient thermal fluctuation. The temperature rise is limited to isolated intervals and does not exhibit flame velocity characteristics.';
+  let recommendation = 'No action required. Standard automated environmental monitoring is active.';
+
+  if (consecutiveRiseCount >= 4 || temperature > 38.0 || (temperature > 35.0 && delta5m > 3.0)) {
+    riskLevel = 'CRITICAL';
+    category = 'FIRE_HAZARD_ALERT';
+    probability = Math.min(98, 75 + Math.round((temperature - 35) * 4));
+    summary = `🚨 URGENT: Potential Fire or Severe Thermal Runaway Hazard. Temperature has climbed across ${consecutiveRiseCount} consecutive intervals to ${temperature}°C with rapid acceleration (+${delta5m}°C in window).`;
+    recommendation = 'Evacuate immediately if smoke or burning smell is detected. Safe Mode master power lock is active. Inspect high-power appliances and electrical breakers.';
+  } else if (consecutiveRiseCount >= 3 || temperature > 32.0 || delta5m > 1.8) {
+    riskLevel = 'MODERATE';
+    category = 'SUSTAINED_ACCUMULATION';
+    probability = Math.min(65, 30 + Math.round(consecutiveRiseCount * 8));
+    summary = `⚠️ Warning: Sustained Heat Accumulation. Temperature has climbed across ${consecutiveRiseCount} consecutive intervals to ${temperature}°C. Potential appliance overheating or lack of room ventilation.`;
+    recommendation = 'Check room ventilation and active heat-generating devices. Light 1 cooling indicator is active. Ensure thermal limits are not breached.';
+  }
+
+  // If online Groq key available, enhance with LLM cognitive reasoning
+  if (API_KEY) {
+    const prompt = `You are ORBIT AI Thermal Safety Specialist.
+Analyze the following real-time IoT sensor telemetry:
+- Current Room Temperature: ${temperature}°C
+- 5-Minute Window Delta (ΔT): ${delta5m > 0 ? '+' : ''}${delta5m}°C
+- Consecutive Rise Intervals: ${consecutiveRiseCount} consecutive intervals
+- Current Humidity: ${humidity}%
+- Hub CPU Temp: ${hubTemp}°C
+- Safe Mode (Master Switch Locked): ${safeMode ? 'YES' : 'NO'}
+- Light 1 (Cooling Indicator): ${light1 ? 'ON' : 'OFF'}
+- Rule Diagnostic Baseline: Category=${category}, Risk=${riskLevel}
+
+Distinguish whether this temperature rise is:
+A) A NORMAL TRANSIENT RISE (e.g. 1-2 intervals rise due to sunlight, door opened, cooking nearby, normal drift)
+B) SUSTAINED APPLIANCE OVERHEAT (e.g. 3+ intervals steady warming, heater left on)
+C) URGENT FIRE / THERMAL RUNAWAY HAZARD (e.g. 4+ intervals continuous steep surge, extreme heat >38°C, rapid humidity drop)
+
+Respond ONLY with valid JSON in this exact structure:
+{
+  "riskLevel": "LOW" | "MODERATE" | "HIGH" | "CRITICAL",
+  "category": "NORMAL_TRANSIENT" | "SUSTAINED_ACCUMULATION" | "FIRE_HAZARD_ALERT",
+  "fireProbability": number (0 to 100),
+  "consecutiveSpikeAnalysis": "string explaining the significance of the ${consecutiveRiseCount} intervals",
+  "summary": "concise 2-sentence assessment",
+  "recommendation": "concise actionable advice for homeowner"
+}`;
+
+    for (const model of FALLBACK_MODELS) {
+      try {
+        const response = await axios.post(
+          API_URL,
+          {
+            model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.2,
+            max_tokens: 300,
+            response_format: { type: 'json_object' }
+          },
+          {
+            headers: { 'Authorization': `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
+            timeout: 6000
+          }
+        );
+
+        let content = response.data?.choices?.[0]?.message?.content;
+        if (content) {
+          content = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+          const parsed = JSON.parse(content);
+          return {
+            ...parsed,
+            source: 'orbit-ai-groq',
+            model,
+            evaluatedAt: new Date().toISOString()
+          };
+        }
+      } catch (e) {
+        console.warn(`[ThermalDiagnostics] Groq model "${model}" failed, using next/fallback:`, e.message);
+      }
+    }
+  }
+
+  return {
+    riskLevel,
+    category,
+    fireProbability: probability,
+    consecutiveSpikeAnalysis: `Observed ${consecutiveRiseCount} sequential thermal rise interval(s). ${consecutiveRiseCount <= 2 ? 'Isolated flux typical of normal ambient events.' : 'Sustained acceleration exceeding baseline bounds.'}`,
+    summary,
+    recommendation,
+    source: 'orbit-ai-heuristic',
+    evaluatedAt: new Date().toISOString()
+  };
+}
+
+/**
+ * AI Spike Predictor & Risk Analyzer (Past Trajectory + Future Forecast + Fire Risk)
+ * Analyzes an individual spike anomaly event using Groq LLM.
+ */
+export async function analyzeSpecificSpike(payload = {}) {
+  const {
+    spike = {},
+    telemetry = {},
+    recentPoints = []
+  } = payload;
+
+  const sensorType = spike.sensorType || 'temperature';
+  const label = spike.label || 'Room Sensor';
+  const direction = spike.direction || 'Surge';
+  const delta = spike.delta || 0;
+  const prevVal = spike.prevVal ?? 28.0;
+  const currentVal = spike.currentVal ?? (prevVal + delta);
+  const unit = spike.unit || (sensorType === 'humidity' ? '%' : '°C');
+  const timeStr = spike.timeStr || 'Recent';
+
+  // Heuristic baseline calculations
+  const isTemp = sensorType === 'temperature';
+  const isHum = sensorType === 'humidity';
+  const isSurge = direction === 'Surge' || delta > 0;
+  const isExtremeTemp = isTemp && isSurge && currentVal > 35.0;
+  const isElevatedTemp = isTemp && isSurge && currentVal > 30.0;
+
+  let riskLevel = 'LOW';
+  let fireProbability = isTemp && isSurge ? Math.min(95, Math.max(5, Math.round((currentVal - 28) * 8))) : 3;
+  let pastAnalysis = `Sensor transitioned from ${prevVal}${unit} to ${currentVal}${unit} in a single discrete telemetry interval.`;
+  let futureForecast = `Environmental slope is stabilizing near current baseline (${currentVal}${unit}).`;
+  let safetyAdvice = 'Standard continuous sliding window stream processing is active.';
+
+  if (isExtremeTemp) {
+    riskLevel = 'CRITICAL';
+    fireProbability = Math.min(98, 70 + Math.round((currentVal - 35) * 6));
+    pastAnalysis = `Sudden sharp thermal spike (+${delta}°C) pushed the environment above the 35.0°C safety ceiling. Previous baseline was ${prevVal}°C.`;
+    futureForecast = `If thermal input continues unmitigated, temperature will exceed 38°C in ~3–5 minutes. Safe Mode power cutoff is engaged to isolate ignition sources.`;
+    safetyAdvice = `Check room for burning smell, smoke, or overloaded electrical outlets immediately. Safe Mode auto-lock is protecting the household.`;
+  } else if (isElevatedTemp) {
+    riskLevel = 'MODERATE';
+    fireProbability = Math.min(45, 15 + Math.round((currentVal - 30) * 6));
+    pastAnalysis = `Temperature climbed by +${delta}°C crossing the 30.0°C comfort threshold. Room was previously at ${prevVal}°C.`;
+    futureForecast = `Light 1 cooling indicator is active. If heat continues rising, Safe Mode will engage at 35.0°C. If dissipated, temperature will return below 30°C in ~5–10 mins.`;
+    safetyAdvice = `Ensure room ventilation or AC cooling is operating. Monitor the thermal trajectory.`;
+  } else if (isTemp && !isSurge) {
+    riskLevel = 'LOW';
+    fireProbability = 2;
+    pastAnalysis = `Rapid cooling drop of ${delta}°C from ${prevVal}°C down to ${currentVal}°C.`;
+    futureForecast = `Thermal energy is dissipating effectively. Automated cooling devices will restore to resting state once baseline drops below 30.0°C.`;
+    safetyAdvice = `Normal cooling recovery observed. No intervention necessary.`;
+  } else if (isHum) {
+    riskLevel = isSurge && currentVal > 80 ? 'MODERATE' : 'LOW';
+    pastAnalysis = `Humidity experienced an abrupt ${direction.toLowerCase()} of ${delta > 0 ? '+' : ''}${delta}% from ${prevVal}% to ${currentVal}%.`;
+    futureForecast = `Moisture content will normalize over the next 10–15 minutes as room air circulates.`;
+    safetyAdvice = isSurge && currentVal > 80 ? 'Check for steam, boiling water, or moisture ingress.' : 'Humidity shift is transient and non-hazardous.';
+  }
+
+  // LLM Query via Groq Cloud
+  if (API_KEY) {
+    const prompt = `You are ORBIT AI Real-Time IoT Anomaly & Fire Safety Diagnostic Engine.
+Analyze this specific sensor anomaly event:
+- Sensor: ${label} (${sensorType})
+- Event: ${direction} of ${delta > 0 ? '+' : ''}${delta}${unit} (${prevVal}${unit} → ${currentVal}${unit}) at ${timeStr}
+- Current Telemetry State: Room Temp=${telemetry.temperature ?? 'N/A'}°C, Humidity=${telemetry.humidity ?? 'N/A'}%, Safe Mode=${telemetry.safeMode ? 'LOCKED' : 'OFF'}, Light 1=${telemetry.light1 ? 'ON' : 'OFF'}
+
+Explain:
+1. Past Trajectory (Why this spike likely happened based on environmental context)
+2. Risk & Fire Hazard Assessment (Fire risk % and severity level)
+3. Future Forecast (What will happen in next 5-15 minutes if trend continues vs dissipates)
+4. Homeowner Actionable Safety Advice
+
+Respond ONLY with valid JSON in this exact structure:
+{
+  "riskLevel": "LOW" | "MODERATE" | "HIGH" | "CRITICAL",
+  "fireProbability": number (0 to 100),
+  "hazardClassification": "FIRE_HAZARD" | "APPLIANCE_THERMAL_STRESS" | "RAPID_COOLING" | "HUMIDITY_FLUX" | "BENIGN_TRANSIENT",
+  "pastAnalysis": "concise explanation of precursor and immediate trigger",
+  "futureForecast": "projected 5-15 min thermal / environmental outcome",
+  "safetyAdvice": "clear actionable instruction for the user"
+}`;
+
+    for (const model of FALLBACK_MODELS) {
+      try {
+        const response = await axios.post(
+          API_URL,
+          {
+            model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.2,
+            max_tokens: 350,
+            response_format: { type: 'json_object' }
+          },
+          {
+            headers: { 'Authorization': `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
+            timeout: 7000
+          }
+        );
+
+        let content = response.data?.choices?.[0]?.message?.content;
+        if (content) {
+          content = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+          const parsed = JSON.parse(content);
+          return {
+            ...parsed,
+            spikeId: spike.id,
+            source: 'orbit-ai-groq',
+            model,
+            analyzedAt: new Date().toISOString()
+          };
+        }
+      } catch (e) {
+        console.warn(`[SpikeAnalysis] Groq model "${model}" failed, using fallback:`, e.message);
+      }
+    }
+  }
+
+  return {
+    riskLevel,
+    fireProbability,
+    hazardClassification: isExtremeTemp ? 'FIRE_HAZARD' : isElevatedTemp ? 'APPLIANCE_THERMAL_STRESS' : isTemp && !isSurge ? 'RAPID_COOLING' : isHum ? 'HUMIDITY_FLUX' : 'BENIGN_TRANSIENT',
+    pastAnalysis,
+    futureForecast,
+    safetyAdvice,
+    spikeId: spike.id,
+    source: 'orbit-ai-heuristic',
+    analyzedAt: new Date().toISOString()
+  };
+}

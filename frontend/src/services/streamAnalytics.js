@@ -173,6 +173,141 @@ export function detectSuddenSpike(sensorType, currentVal, recentHistory = []) {
 }
 
 /**
+ * Scans an array of chronological history points to find all past spike anomaly events.
+ * Enables instant population of the Anomaly Feed on load or page refresh.
+ */
+export function extractHistoricalSpikes(points = [], sensorType = 'temperature') {
+  if (!points || !Array.isArray(points) || points.length < 2) return [];
+
+  let threshold = 2.0;
+  let unit = '°C';
+  let label = 'Room Temperature';
+
+  if (sensorType === 'humidity') {
+    threshold = 6.0;
+    unit = '%';
+    label = 'Room Humidity';
+  } else if (sensorType === 'hubTemp') {
+    threshold = 3.5;
+    unit = '°C';
+    label = 'Hub Pi Temperature';
+  }
+
+  const spikes = [];
+  const sorted = [...points].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1];
+    const curr = sorted[i];
+    const prevVal = typeof prev.value === 'number' ? prev.value : parseNumeric(prev.value);
+    const currVal = typeof curr.value === 'number' ? curr.value : parseNumeric(curr.value);
+
+    if (prevVal !== null && currVal !== null && !isNaN(prevVal) && !isNaN(currVal)) {
+      const delta = +(currVal - prevVal).toFixed(2);
+      if (Math.abs(delta) >= threshold) {
+        const direction = delta > 0 ? 'Surge' : 'Drop';
+        const sign = delta > 0 ? '+' : '';
+        const timeStr = curr.timeStr || new Date(curr.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+        spikes.push({
+          id: `${sensorType}-${curr.timestamp || i}`,
+          sensorType,
+          label,
+          isSpike: true,
+          direction,
+          delta,
+          prevVal,
+          currentVal: currVal,
+          unit,
+          timestamp: curr.timestamp ? new Date(curr.timestamp).toISOString() : new Date().toISOString(),
+          timeStr,
+          message: `⚡ Sudden ${label} ${direction}: ${sign}${delta}${unit} in a single interval (${prevVal}${unit} → ${currVal}${unit})!`
+        });
+      }
+    }
+  }
+
+  return spikes;
+}
+
+/**
+ * Intelligent Thermal Guidance Engine:
+ * Generates user-friendly advice and system state insights based on temperature levels,
+ * delta velocity, safe mode / light 1 status, and recent spikes.
+ */
+export function getThermalGuidance({ temperature, trend = 'stable', analytics = {}, safeMode = false, light1 = false, latestSpike = null }) {
+  const temp = typeof temperature === 'number' && !isNaN(temperature) ? temperature : (analytics?.avgTemp5m ?? 28.5);
+  const avg5m = analytics?.avgTemp5m ?? temp;
+  const delta5m = +(temp - avg5m).toFixed(2);
+
+  // Critical Overheat Zone (> 35°C)
+  if (temp > 35.0) {
+    return {
+      severity: 'critical',
+      badge: '🔥 CRITICAL THERMAL HAZARD (> 35°C)',
+      badgeColor: '#dc2626',
+      bgColor: 'rgba(239, 68, 68, 0.12)',
+      borderColor: 'rgba(239, 68, 68, 0.4)',
+      title: `Critical Heat Alert: ${temp}°C`,
+      summary: `Room temperature has breached the 35.0°C safety ceiling.`,
+      statusExplanation: `Safe Mode (Master Switch) is automatically LOCKED (ON) to protect appliances from thermal stress. Light 1 remains ON for cooling indicator.`,
+      guidance: `Check room ventilation, AC units, and open heat sources immediately. The system will automatically restore and unlock Safe Mode once temperature reduces to 35.0°C or below.`,
+      actionRequired: true,
+      trendText: trend === 'rising' ? '⚠️ Temperature is still rising' : trend === 'falling' ? '❄️ Temperature is starting to cool down' : 'Temperature holding at critical level'
+    };
+  }
+
+  // Elevated Warning Zone (30°C - 35°C)
+  if (temp > 30.0) {
+    return {
+      severity: 'warning',
+      badge: '⚠️ ELEVATED TEMPERATURE (> 30°C)',
+      badgeColor: '#f59e0b',
+      bgColor: 'rgba(245, 158, 11, 0.12)',
+      borderColor: 'rgba(245, 158, 11, 0.4)',
+      title: `Elevated Heat: ${temp}°C`,
+      summary: `Room temperature is above the 30.0°C comfort baseline.`,
+      statusExplanation: `Light 1 is automatically turned ON as an active cooling / heat warning indicator. Safe Mode remains OFF.`,
+      guidance: `If the temperature continues to rise above 35.0°C, Safe Mode will auto-lock. When temperature drops below 30.0°C, Light 1 will automatically turn OFF.`,
+      actionRequired: false,
+      trendText: trend === 'rising' ? '📈 Rapid heat accumulation detected' : trend === 'falling' ? '📉 Dissipating heat towards comfort range' : 'Stable elevated state'
+    };
+  }
+
+  // Rapid Drop / Sudden Cooling Spike
+  if (latestSpike && latestSpike.direction === 'Drop' && latestSpike.sensorType === 'temperature') {
+    return {
+      severity: 'info',
+      badge: '❄️ RAPID THERMAL DISSIPATION',
+      badgeColor: '#0284c7',
+      bgColor: 'rgba(14, 165, 233, 0.12)',
+      borderColor: 'rgba(14, 165, 233, 0.4)',
+      title: `Rapid Cooling: ${temp}°C (${latestSpike.delta}°C Drop)`,
+      summary: `Sensors recorded a sudden temperature drop of ${latestSpike.delta}°C.`,
+      statusExplanation: `Room is cooling down quickly. Automated rules are monitoring the return below 30.0°C.`,
+      guidance: `Cooling is effective. Light 1 will automatically switch OFF when temperature stabilizes below 30.0°C.`,
+      actionRequired: false,
+      trendText: '❄️ Rapid cooling slope in progress'
+    };
+  }
+
+  // Optimal Safe Zone (<= 30°C)
+  return {
+    severity: 'optimal',
+    badge: '🛡️ OPTIMAL THERMAL STABILITY (≤ 30°C)',
+    badgeColor: '#10b981',
+    bgColor: 'rgba(16, 185, 129, 0.1)',
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+    title: `Comfortable Environment: ${temp}°C`,
+    summary: `Room temperature is within optimal normal operating boundaries.`,
+    statusExplanation: `All connected smart devices are operating under standard conditions. Both Light 1 and Safe Mode are in normal resting states.`,
+    guidance: `No thermal intervention needed. Live continuous stream processing is actively monitoring for sudden spikes or temperature surges.`,
+    actionRequired: false,
+    trendText: trend === 'rising' ? 'Mild upward drift within safe bounds' : trend === 'falling' ? 'Cooling within comfort zone' : 'Equilibrium (±0.1°C variance)'
+  };
+}
+
+/**
  * Color Threshold Resolvers for Charts & Status Indicators
  */
 export function getTemperatureColor(temp) {
