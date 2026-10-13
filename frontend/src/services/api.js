@@ -3,11 +3,14 @@ const API_BASE = '/api';
 /**
  * Sends a message to AI chatbot via the backend
  */
-export async function sendChatMessage(message, history = []) {
+export async function sendChatMessage(message, history = [], apiKey = null) {
+  const payload = { message, history };
+  if (apiKey) payload.apiKey = apiKey;
+
   const response = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, history })
+    body: JSON.stringify(payload)
   });
 
   if (!response.ok) {
@@ -16,6 +19,22 @@ export async function sendChatMessage(message, history = []) {
   }
 
   return response.json();
+}
+
+/**
+ * Updates the active AI API key on the backend
+ */
+export async function saveAiApiKey(apiKey) {
+  try {
+    const response = await fetch(`${API_BASE}/chat/key`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey })
+    });
+    return await response.json();
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 }
 
 /**

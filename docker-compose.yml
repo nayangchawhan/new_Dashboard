@@ -11,8 +11,8 @@ services:
     container_name: orbit-frontend
     restart: unless-stopped
     ports:
-      - "80:80"      # Standard HTTP port on EC2
-      - "3000:80"    # Optional port 3000 mapping
+      - "80:80" # Standard HTTP port on EC2
+      - "3000:80" # Optional port 3000 mapping
     depends_on:
       - backend
     environment:

@@ -7,14 +7,63 @@ import { getLiveWeather } from './weatherService.js';
 dotenv.config();
 
 // Determine API configuration (Supports GroqCloud LPU with Orbit AI branding)
-const API_KEY = process.env.GROQ_API_KEY || process.env.GROK_API_KEY || process.env.XAI_API_KEY || '';
-const isGroqKey = API_KEY.startsWith('gsk_');
+let RUNTIME_API_KEY = process.env.GROQ_API_KEY || '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';
 
-const API_URL = process.env.GROQ_API_URL || process.env.GROK_API_URL || (isGroqKey ? 'https://api.groq.com/openai/v1/chat/completions' : 'https://api.x.ai/v1/chat/completions');
-const PRIMARY_MODEL = process.env.GROQ_MODEL || process.env.GROK_MODEL || (isGroqKey ? 'openai/gpt-oss-120b' : 'grok-beta');
-const FALLBACK_MODELS = isGroqKey 
-  ? [PRIMARY_MODEL, 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'qwen/qwen3.6-27b', 'groq/compound'].filter((v, i, a) => a.indexOf(v) === i)
-  : [PRIMARY_MODEL];
+const API_URL = process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1/chat/completions';
+const PRIMARY_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
+
+const FALLBACK_MODELS = [
+  PRIMARY_MODEL,
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
+  'qwen/qwen3.8-27b'
+].filter((v, i, a) => a.indexOf(v) === i);
+
+export function setRuntimeApiKey(key) {
+  if (typeof key === 'string' && key.trim()) {
+    RUNTIME_API_KEY = key.trim();
+  }
+}
+
+/**
+ * Searches Wikipedia REST API for general knowledge topics and extracts.
+ */
+async function fetchWikipediaKnowledge(query) {
+  try {
+    const cleanQuery = query
+      .replace(/how to make|how to cook|how to prepare|recipe for|what is|who is|explain|tell me about|information on/gi, '')
+      .replace(/[?!.]/g, '')
+      .trim();
+
+    if (!cleanQuery || cleanQuery.length < 2) return null;
+
+    const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(cleanQuery)}&format=json&utf8=1`;
+    const searchRes = await axios.get(searchUrl, {
+      headers: { 'User-Agent': 'OrbitSmartHome/1.0 (contact@orbit.local)' },
+      timeout: 4000
+    });
+
+    const hits = searchRes.data?.query?.search;
+    if (!hits || hits.length === 0) return null;
+
+    const bestTitle = hits[0].title;
+    const summaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(bestTitle)}`;
+    const pageRes = await axios.get(summaryUrl, {
+      headers: { 'User-Agent': 'OrbitSmartHome/1.0 (contact@orbit.local)' },
+      timeout: 4000
+    });
+
+    if (!pageRes.data?.extract) return null;
+
+    return {
+      title: pageRes.data.title,
+      description: pageRes.data.description,
+      extract: pageRes.data.extract
+    };
+  } catch (err) {
+    return null;
+  }
+}
 
 /**
  * Parses user intent for direct smart home actions and executes them.
@@ -108,72 +157,195 @@ export async function handleUserActionIntents(userMessage) {
 }
 
 /**
- * Builds the comprehensive context prompt incorporating live telemetry, weather forecast, and device states.
+ * Builds system prompt for Cloud LLM
  */
 function buildSystemPrompt(snapshot, weather, executedActions = []) {
   const s = snapshot.sensors;
   const d = snapshot.devices;
   const sch = snapshot.schedule;
   const a = snapshot.analytics;
+  const o = weather.outfit || {};
 
   let actionContext = '';
   if (executedActions.length > 0) {
     actionContext = `\nRECENT ACTIONS JUST EXECUTED IN RESPONSE TO USER COMMAND:\n` +
       executedActions.map(act => `⚡ ${act.message}`).join('\n') +
-      `\nConfirm these executed actions clearly to the user.\n`;
+      `\nConfirm these executed actions clearly and warmly to the user.\n`;
   }
 
-  return `You are Orbit AI, the intelligent, helpful, and friendly Smart Home and Personal AI Assistant for the ORBIT platform.
-You have real-time access to live Firebase telemetry, environmental sensors (temperature, humidity, motion, battery, Raspberry Pi hub temperature), automated device controls (lights, safe mode, schedules), and real-time weather forecasting.
+  return `You are Orbit AI, an intelligent, helpful, and versatile AI assistant created for the ORBIT platform (operating with the conversational depth, warmth, and reasoning capabilities of Google Gemini).
 
-ASSISTANT CAPABILITIES & GUIDELINES:
-1. SMART HOME & TELEMETRY: For questions about room temperature, hub/Pi temperature, lights, safe mode, battery, motion, or schedules, always use the exact live telemetry provided below.
-2. WEATHER & UMBRELLA QUESTIONS: Answer weather questions (e.g. "will it rain today?", "is an umbrella required?", "what is the weather?") using the live weather data below. If precipitation probability is >= 40% or it's raining, clearly state that an umbrella is recommended!
-3. GENERAL & LIFESTYLE QUERIES: You are a full-featured AI assistant. Feel free to answer general questions (daily advice, energy savings, smart home best practices, planning, etc.) warmly and accurately.
-4. DEVICE ACTIONS: If the user asks to turn on/off lights, toggle safe mode, or set schedules, report the action status directly.
-5. FORMATTING: Use clean Markdown with bold text, bullet points, and helpful emoji indicators (🌡️, 💧, 🔋, 🖥️, 🚶, 💡, 🔒, ☔, ☀️, ⚡) to make your answers easy to read.
+CORE CAPABILITIES & BEHAVIOR:
+1. UNIVERSAL AI ASSISTANT: You can answer ANY question the user asks with deep accuracy, helpfulness, and conversational depth.
+   - Cooking & Recipes: Detailed, mouth-watering, step-by-step cooking guides (e.g., authentic Dum Biryani, pastas, regional specialties, tea/chai, desserts).
+   - Knowledge & Learning: Science, history, math, coding, literature, philosophy, technology, and explanations of complex concepts.
+   - Daily Life & Advice: Health, fitness, time management, recommendations, productivity.
+   - NEVER restrict yourself to only smart-home topics! You are a complete, general-purpose conversational AI assistant.
 
-LIVE SMART HOME TELEMETRY:
-----------------------------------------
-Timestamp: ${snapshot.timestamp}
+2. SMART HOME EXPERT: You have direct real-time telemetry from the home's sensors and smart controls. Answer queries about indoor temperature, hub Raspberry Pi temp, humidity, motion, battery health, safe mode lock, and lights using the LIVE TELEMETRY below.
 
-📡 Room & Hub Sensors:
+3. DEVICE CONTROLS: If the user commands device actions (e.g. "turn on/off light 1/2/3", "enable/disable safe mode", "lock safe mode", or set automation schedules), acknowledge the executed actions warmly.
+
+4. WEATHER, UMBRELLA & OUTFIT RECOMMENDATIONS:
+   - Provide exact outdoor conditions, rain probability, and umbrella advice from the LIVE WEATHER data below.
+   - OUTFIT STYLING: When asked what to wear, for outfit recommendations, or how to dress today, provide smart, stylish, practical recommendations tailored specifically to the outdoor temperature, humidity, and whether it will rain!
+
+LIVE TELEMETRY:
 - Room Ambient Temperature: ${s.temperature !== null ? `${s.temperature}°C` : 'Unavailable'}
 - Room Relative Humidity: ${s.humidity !== null ? `${s.humidity}%` : 'Unavailable'}
 - Sensor Battery Level: ${s.battery !== null ? `${s.battery}%${s.battery < 30 ? ' (⚠️ LOW BATTERY WARNING)' : ' (Healthy)'}` : 'Unavailable'}
 - Raspberry Pi Hub Temperature: ${s.hubTemperature !== null ? `${s.hubTemperature}°C${s.hubTemperature > 55 ? ' (⚠️ ELEVATED)' : ' (Normal - Cool)'}` : 'Unavailable'}
 - Motion Sensor: ${s.motionDetected ? 'Movement Detected (ACTIVE)' : 'No Movement (CLEAR)'}
-
-💡 Devices & Controls:
 - Safe Mode (Master Switch): ${d.safeMode ? 'ENABLED (Locked - devices protected)' : 'DISABLED (Unlocked)'}
-- Light 1: ${d.light1 ? 'ON' : 'OFF'}
-- Light 2: ${d.light2 ? 'ON' : 'OFF'}
-- Light 3: ${d.light3 ? 'ON' : 'OFF'}
+- Lights: Light 1 (${d.light1 ? 'ON' : 'OFF'}), Light 2 (${d.light2 ? 'ON' : 'OFF'}), Light 3 (${d.light3 ? 'ON' : 'OFF'})
+- Light Schedule: ON at ${sch.onTime || 'Not Set'} | OFF at ${sch.offTime || 'Not Set'}
+- Stream Analytics: 5m Rolling Avg: ${a.avgTemp5m !== undefined ? `${a.avgTemp5m}°C` : 'N/A'}, Trend: ${a.trend || 'stable'}
 
-⏰ Automation Schedule:
-- Light 3 Schedule: ON at ${sch.onTime || 'Not Set'} | OFF at ${sch.offTime || 'Not Set'}
-
-📊 Stream Analytics (Flink Engine):
-- 5-Min Room Rolling Avg: ${a.avgTemp5m !== undefined ? `${a.avgTemp5m}°C` : 'N/A'} (Window: ${a.minTemp ?? '--'}°C / ${a.maxTemp ?? '--'}°C)
-- 5-Min Hub Pi Rolling Avg: ${s.hubTemperature !== null ? `${s.hubTemperature}°C` : '47.2°C'} (Thermal Status: ${s.hubTemperature > 55 ? 'Elevated' : 'Optimal <55°C'})
-- Temperature Trend: ${a.trend || 'stable'}
-- Anomaly Status: ${a.anomalyDetected ? '⚠️ THERMAL ANOMALY DETECTED' : 'Normal Operations'}
-
-🌤️ Real-Time Outdoor Weather & Forecast:
+LIVE OUTDOOR WEATHER & OUTFIT CONTEXT:
 - Outdoor Temperature: ${weather.temperature !== null ? `${weather.temperature}°C` : 'N/A'}
 - Outdoor Humidity: ${weather.humidity !== null ? `${weather.humidity}%` : 'N/A'}
-- Rain / Precipitation Chance Today: ${weather.maxRainProb}%
-- Rain Expected Today: ${weather.rainExpectedToday ? 'YES' : 'NO'}
-- Umbrella Recommendation: ${weather.umbrellaRequired ? 'YES, Umbrella is recommended today! ☔' : 'NO, Umbrella is not required today. ☀️'}
-- Summary: ${weather.summary}
-----------------------------------------
+- Precipitation / Rain Probability: ${weather.maxRainProb}%
+- Rain Expected Today: ${weather.rainExpectedToday ? 'YES (High Chance)' : 'NO (Low Chance)'}
+- Umbrella Needed: ${weather.umbrellaRequired ? 'YES, Umbrella is recommended today! ☔' : 'NO, Umbrella is not required today. ☀️'}
+- Suggested Outfit Style: Tops: "${o.tops || 'Breathable casual'}", Bottoms: "${o.bottoms || 'Jeans/Chinos'}", Footwear: "${o.footwear || 'Sneakers'}", Accessories: "${(o.accessories || []).join(', ')}"
+
+FORMATTING:
+Use clean, beautiful Markdown with headers, bullet points, bold text, and expressive emojis. Be engaging, thorough, and articulate!
 ${actionContext}`;
 }
 
 /**
- * Intelligent local fallback when offline or during network issues.
+ * Dedicated Recipe & Cooking Knowledge Generator
  */
-function localSmartAnswer(userMessage, snapshot, weather, executedActions = []) {
+function generateRecipeAnswer(dishQuery) {
+  const q = dishQuery.toLowerCase();
+
+  if (q.includes('biryani')) {
+    return `### 🍛 How to Make Authentic Dum Biryani
+
+**Preparation Time:** ~45 mins | **Cooking Time:** ~35 mins | **Servings:** 4
+
+#### 🛒 Key Ingredients:
+- **Rice:** 2 cups aged Basmati Rice (washed and soaked for 30 minutes)
+- **Base / Protein:** 500g Chicken, Mutton, Paneer, or Mixed Vegetables (cut into medium pieces)
+- **Marination:**
+  - 1 cup plain yogurt (curd)
+  - 2 tbsp ginger-garlic paste
+  - 1 tbsp red chili powder & 1 tsp turmeric
+  - 1 tbsp biryani masala (or garam masala)
+  - Juice of 1 lemon, salt to taste
+- **Whole Spices:** 2 bay leaves, 4 green cardamoms, 1 black cardamom, 4 cloves, 1 cinnamon stick, 1 tsp cumin/shahi jeera
+- **Layering & Aroma:**
+  - 2 large onions, thinly sliced and fried until golden-brown (*birista*)
+  - Handful of fresh mint & coriander leaves, finely chopped
+  - 2 tbsp warm milk infused with a pinch of saffron strands
+  - 2 tbsp pure ghee
+
+---
+
+#### 👨‍🍳 Step-by-Step Instructions:
+
+1. **Step 1: Marination (Flavor Foundation)**
+   - In a large bowl, mix your meat or vegetables with yogurt, ginger-garlic paste, spices, lemon juice, salt, and half of the fried onions (*birista*).
+   - Let it marinate for at least **1 to 2 hours** (or overnight in the refrigerator for best tenderness).
+
+2. **Step 2: Parboil the Basmati Rice**
+   - In a deep pot, bring 6 cups of water to a rolling boil with 1.5 tbsp salt and the whole spices (bay leaf, cinnamon, cardamom, cloves).
+   - Add the soaked rice and boil for **6–7 minutes** until the rice is **70% cooked** (it should still have a slight bite in the center).
+   - Drain the hot water immediately and spread the rice out on a tray.
+
+3. **Step 3: Layering (Dum Assembly)**
+   - In a heavy-bottomed pot (or Dutch oven), grease the base with 1 tbsp ghee.
+   - Spread the marinated meat or vegetables evenly across the bottom.
+   - Gently layer the 70% cooked warm basmati rice over the top.
+   - Garnish the top with the remaining fried onions, chopped fresh mint, coriander, saffron-infused milk, and 1 tbsp ghee.
+
+4. **Step 4: Dum Cooking (Steam Infusion)**
+   - Seal the pot tightly with aluminum foil or kneaded dough, and place the lid firmly on top to trap all steam.
+   - Cook on **medium-high heat for 5 minutes**, then place the pot over a flat tawa (griddle) on **low heat for 25–30 minutes**.
+   - Turn off the heat and let it rest undisturbed for **10 minutes**.
+
+5. **Step 5: Serve**
+   - Gently fluff from the bottom with a flat spatula without breaking the long rice grains.
+   - Serve piping hot with cool cucumber mint raita, mirchi ka salan, and lemon wedges! 🍚✨`;
+  }
+
+  if (q.includes('tea') || q.includes('chai')) {
+    return `### ☕ How to Make Authentic Indian Masala Chai
+
+**Prep Time:** 2 mins | **Cook Time:** 8 mins | **Servings:** 2 cups
+
+#### 🛒 Ingredients:
+- 1.5 cups water
+- 1 cup whole milk
+- 2 tsp strong black tea leaves (Assam or CTC tea)
+- 2 crushed green cardamoms
+- 1 inch fresh ginger, crushed or grated
+- 1 small cinnamon stick & 2 cloves (optional)
+- 2 tsp sugar or jaggery (adjust to taste)
+
+---
+
+#### 👨‍🍳 Instructions:
+1. **Boil Aromatics:** In a saucepan, bring the water to a boil. Add crushed ginger, cardamom, and whole spices. Simmer for 2–3 minutes to release the aromatic oils.
+2. **Add Tea:** Add the black tea leaves and sugar. Boil for 2 minutes until the liquid turns deep amber.
+3. **Add Milk:** Pour in the milk. Bring it to a rolling boil over medium heat.
+4. **Froth & Simmer:** Lower the heat as it rises, then raise it again (repeat 2–3 times for richness).
+5. **Strain & Serve:** Strain through a fine mesh sieve into your favorite mugs and serve hot with biscuits or samosas! ☕`;
+  }
+
+  if (q.includes('pasta')) {
+    return `### 🍝 How to Make Classic Garlic Herb Pasta
+
+**Prep Time:** 10 mins | **Cook Time:** 15 mins | **Servings:** 2
+
+#### 🛒 Ingredients:
+- 200g pasta (Spaghetti, Penne, or Fettuccine)
+- 3 tbsp extra virgin olive oil
+- 4–5 cloves fresh garlic, thinly sliced
+- 1 tsp red chili flakes
+- 1/2 cup freshly grated Parmesan cheese
+- Handful of fresh parsley, chopped
+- Salt & black pepper to taste
+
+---
+
+#### 👨‍🍳 Instructions:
+1. **Boil Pasta:** Bring a large pot of heavily salted water to a boil. Cook pasta until *al dente* (firm to the bite). Reserve 1/2 cup of starchy pasta water before draining.
+2. **Sauté Garlic:** In a skillet over medium-low heat, warm olive oil. Add sliced garlic and chili flakes. Sauté gently for 1–2 minutes until fragrant and lightly golden (do not burn).
+3. **Emulsify:** Add 1/4 cup of the reserved pasta water to the oil and swirl to create a glossy emulsion.
+4. **Toss:** Add the drained pasta into the skillet. Toss vigorously over medium heat so the sauce coats every strand.
+5. **Garnish & Serve:** Remove from heat, stir in Parmesan cheese and parsley. Season with black pepper and serve hot! 🧀`;
+  }
+
+  if (q.includes('pizza')) {
+    return `### 🍕 How to Make Homemade Margherita Pizza
+
+**Prep Time:** 20 mins | **Bake Time:** 12 mins | **Servings:** 1 large pizza
+
+#### 🛒 Ingredients:
+- 1 ready pizza dough base (or 2 cups flour + 1 tsp yeast + 3/4 cup warm water)
+- 1/2 cup tomato pizza sauce (crushed tomatoes, garlic, oregano, basil)
+- 1.5 cups shredded Mozzarella cheese
+- Fresh basil leaves & 1 tbsp olive oil
+
+---
+
+#### 👨‍🍳 Instructions:
+1. **Preheat Oven:** Preheat your oven to its highest temperature (230°C–250°C / 475°F) with a baking tray inside.
+2. **Shape Dough:** Stretch your dough on parchment paper into a 10–12 inch circle with slightly raised edges.
+3. **Top It:** Spread tomato sauce evenly leaving a 1/2-inch border. Scatter mozzarella cheese generously.
+4. **Bake:** Slide onto the hot baking tray. Bake for **10–12 minutes** until the crust is golden-brown and the cheese is bubbling.
+5. **Finish:** Top with fresh basil leaves and a drizzle of olive oil before slicing! 🍕`;
+  }
+
+  return null;
+}
+
+/**
+ * Intelligent Local Answering & Knowledge Engine
+ */
+async function localSmartAnswer(userMessage, snapshot, weather, executedActions = [], keyError = null) {
   const q = userMessage.toLowerCase().trim();
   const s = snapshot.sensors;
   const d = snapshot.devices;
@@ -185,7 +357,25 @@ function localSmartAnswer(userMessage, snapshot, weather, executedActions = []) 
     prefix = `⚡ **Action Executed:** ${executedActions.map(e => e.message).join('. ')}\n\n`;
   }
 
-  // 1. Weather / Rain / Umbrella inquiries
+  // 1. Check for Recipe / Cooking inquiries
+  const recipeResult = generateRecipeAnswer(q);
+  if (recipeResult) {
+    return prefix + recipeResult;
+  }
+
+  // 2. Outfit / What to Wear inquiries
+  if (q.includes('wear') || q.includes('outfit') || q.includes('clothes') || q.includes('clothing') || q.includes('dress') || q.includes('dressing')) {
+    const o = weather.outfit || {};
+    return prefix + `👗 **Personal Outfit & Weather Styling Recommendation:**\n\n` +
+      `**Summary:** ${o.summary || 'Dress comfortably for the day.'}\n\n` +
+      `• 👕 **Tops:** ${o.tops || 'Light breathable cotton shirt / t-shirt'}\n` +
+      `• 👖 **Bottoms:** ${o.bottoms || 'Comfortable jeans or chinos'}\n` +
+      `• 👟 **Footwear:** ${o.footwear || 'Comfortable sneakers'}\n` +
+      (o.accessories && o.accessories.length ? `• 🎒 **Key Essentials:** ${o.accessories.join(' | ')}\n\n` : '\n') +
+      `*(Current Conditions: Outdoor Temp: ${weather.temperature ?? '25'}°C | Humidity: ${weather.humidity ?? '55'}% | Rain Chance: ${weather.maxRainProb}% ${weather.umbrellaRequired ? '• ☔ Umbrella Recommended' : '• ☀️ No Umbrella Needed'})*`;
+  }
+
+  // 3. Weather / Rain / Umbrella inquiries
   if (q.includes('rain') || q.includes('umbrella') || q.includes('weather') || q.includes('forecast') || q.includes('outside')) {
     const umbrellaMsg = weather.umbrellaRequired
       ? `☔ **Umbrella Recommended:** Yes, there is a **${weather.maxRainProb}% chance of rain** today. It's a good idea to carry an umbrella!`
@@ -198,7 +388,7 @@ function localSmartAnswer(userMessage, snapshot, weather, executedActions = []) 
       `${umbrellaMsg}`;
   }
 
-  // 2. Schedule inquiries (checked BEFORE generic light queries)
+  // 3. Schedule inquiries
   if (q.includes('schedule') || q.includes('timer') || q.includes('routine') || q.includes('automation')) {
     return prefix + `⏰ **Automated Light Schedule:**\n` +
       `- 💡 **Light 3 Turn ON:** **${sch.onTime || 'Not Configured'}**\n` +
@@ -206,7 +396,7 @@ function localSmartAnswer(userMessage, snapshot, weather, executedActions = []) 
       `*(Light 1 and Light 2 are manually controlled and do not have an active schedule).*`;
   }
 
-  // 3. Hub / Raspberry Pi temperature inquiries
+  // 4. Hub / Raspberry Pi temperature inquiries
   if (q.includes('hub') || q.includes('pi') || q.includes('raspberry') || q.includes('controller temp')) {
     const hubT = s.hubTemperature;
     return prefix + (hubT !== null && !isNaN(hubT)
@@ -214,7 +404,7 @@ function localSmartAnswer(userMessage, snapshot, weather, executedActions = []) 
       : `🖥️ **Hub Temperature:** The Raspberry Pi 4 host controller is currently at **47.2°C** ✅ (Optimal operating range).`);
   }
 
-  // 4. Room temperature inquiries
+  // 5. Room temperature inquiries
   if (q.includes('temperature') || q.includes('temp') || q.includes('how hot') || q.includes('how cold')) {
     let res = prefix + `🌡️ **Room Temperature:** **${s.temperature !== null ? `${s.temperature}°C` : '30°C'}**`;
     if (a.avgTemp5m) res += ` (5-min rolling avg: **${a.avgTemp5m}°C**, trend: **${a.trend}**)`;
@@ -222,33 +412,33 @@ function localSmartAnswer(userMessage, snapshot, weather, executedActions = []) 
     return res;
   }
 
-  // 5. Humidity inquiries
+  // 6. Humidity inquiries
   if (q.includes('humidity') || q.includes('moisture')) {
     return prefix + (s.humidity !== null
       ? `💧 **Relative Humidity:** Current room humidity is **${s.humidity}%**.`
       : `💧 **Relative Humidity:** Current room humidity is normal.`);
   }
 
-  // 6. Battery inquiries
+  // 7. Battery inquiries
   if (q.includes('battery') || q.includes('power') || q.includes('charge')) {
     return prefix + (s.battery !== null
       ? `🔋 **Sensor Battery Level:** Current charge is **${s.battery}%** ${s.battery < 30 ? '⚠️ (Low Battery Warning - Please recharge)' : '✅ (Healthy)'}.`
       : `🔋 **Sensor Battery Level:** Battery level is **65%** ✅ (Healthy).`);
   }
 
-  // 7. Motion inquiries
+  // 8. Motion inquiries
   if (q.includes('motion') || q.includes('movement') || q.includes('intruder') || q.includes('someone')) {
     return prefix + (s.motionDetected
       ? `🚨 **Motion Detected:** The distance sensor is currently detecting active movement!`
       : `✅ **Motion Status:** No movement detected. The area is currently clear.`);
   }
 
-  // 8. Safe mode inquiries
+  // 9. Safe mode inquiries
   if (q.includes('safe mode') || q.includes('master switch') || q.includes('lock') || q.includes('security')) {
     return prefix + `🔒 **Safe Mode Status:** Currently **${d.safeMode ? 'ENABLED (Locked - devices protected)' : 'DISABLED (Unlocked)'}**.`;
   }
 
-  // 9. Light status inquiries
+  // 10. Light status inquiries
   if (q.includes('light') || q.includes('lamp') || q.includes('which device') || q.includes('are the lights on')) {
     const onDevices = [];
     if (d.light1) onDevices.push('Light 1');
@@ -266,8 +456,8 @@ function localSmartAnswer(userMessage, snapshot, weather, executedActions = []) 
     }
   }
 
-  // 10. Status / Overview
-  if (q.includes('status') || q.includes('summary') || q.includes('overview') || q.includes('everything') || q.includes('all')) {
+  // 11. Explicit Home Status / Overview inquiries ONLY
+  if (q.includes('status') || q.includes('summary') || q.includes('overview') || q.includes('system health') || q.includes('diagnostics') || q.includes('home report')) {
     return prefix + `🏠 **ORBIT Smart Home Live Status:**\n` +
       `- 🌡️ **Room Temp:** ${s.temperature !== null ? `${s.temperature}°C` : 'N/A'}\n` +
       `- 💧 **Humidity:** ${s.humidity !== null ? `${s.humidity}%` : 'N/A'}\n` +
@@ -279,21 +469,48 @@ function localSmartAnswer(userMessage, snapshot, weather, executedActions = []) 
       `- ⏰ **Schedule:** ${sch.onTime || '--'} to ${sch.offTime || '--'}`;
   }
 
-  if (q.includes('hello') || q.includes('hi') || q.includes('hey')) {
-    return `👋 **Hello!** I am your **Orbit AI Assistant**. I have direct access to your live Firebase telemetry, device controls, and weather forecast. Ask me about temperatures, battery levels, light statuses, rain/weather, or ask me to turn devices on/off!`;
+  // 12. Greetings & Persona inquiries
+  if (q.match(/^(hi|hello|hey|greetings|good (morning|afternoon|evening))/)) {
+    return prefix + `👋 **Hello!** I am your **Orbit AI Assistant**.\n\nI can help you with:\n- 💡 **Smart Home Controls:** *"Turn on Light 1"*, *"Enable Safe Mode"*\n- 🌡️ **Live Telemetry:** *"What is the room temperature?"*, *"Check Hub Pi temp"*\n- 🌧️ **Weather Forecast:** *"Will it rain today?"*, *"Is an umbrella required?"*\n- 🍳 **General Knowledge & Cooking:** *"How to make biryani"*, *"Explain quantum computing"*\n\nHow can I help you right now?`;
   }
 
-  if (executedActions.length > 0) {
-    return prefix + `The requested changes have been applied to Firebase Realtime Database.`;
+  if (q.includes('who are you') || q.includes('what are you') || q.includes('your name')) {
+    return prefix + `🤖 I am **Orbit AI**, the intelligent assistant built for the ORBIT smart home and IoT platform. I can control your connected devices, monitor environmental telemetry, provide live weather forecasts, and answer general questions and knowledge queries!`;
   }
 
-  return `📊 **Live Smart Home Overview:**\n- Room Temp: ${s.temperature !== null ? `${s.temperature}°C` : 'N/A'} | Hub Temp: ${s.hubTemperature !== null ? `${s.hubTemperature}°C` : 'N/A'}\n- Safe Mode: ${d.safeMode ? 'Active' : 'Off'}\n- Lights: L1 (${d.light1 ? 'ON' : 'OFF'}), L2 (${d.light2 ? 'ON' : 'OFF'}), L3 (${d.light3 ? 'ON' : 'OFF'})\n\nFeel free to ask questions like *"Will it rain today?"*, *"Turn on Light 1"*, or *"Show home status"*!`;
+  if (q.includes('joke')) {
+    const jokes = [
+      "Why did the smart thermostat break up with the air conditioner? Because it said things were just getting too heated! 😂🌡️",
+      "Why was the smart light bulb so good at school? Because it was brilliant! 💡✨",
+      "Why do smart home programmers prefer dark mode? Because light attracts bugs! 🐛💻"
+    ];
+    return prefix + jokes[Math.floor(Math.random() * jokes.length)];
+  }
+
+  if (q.includes('thank')) {
+    return prefix + `You're very welcome! Feel free to ask whenever you need anything. 😊✨`;
+  }
+
+  // 13. General Knowledge Retrieval via Wikipedia REST API
+  const wikiHit = await fetchWikipediaKnowledge(userMessage);
+  if (wikiHit) {
+    let result = prefix + `### 📚 ${wikiHit.title}\n\n${wikiHit.extract}\n\n`;
+    if (wikiHit.description) {
+      result += `- *Context: ${wikiHit.description}*\n`;
+    }
+    return result;
+  }
+
+  // 14. Friendly general fallback (NOT system health dump!)
+  return prefix + `🤖 **Orbit AI:** I understand you're asking about *"**${userMessage}**"*. \n\nI can answer questions across science, cooking, daily topics, and smart home controls. For full generative reasoning, you can configure your free Groq API key in Settings or backend/.env!`;
 }
 
 /**
  * Main chat completion method for Orbit AI.
  */
-export async function askGrok(userMessage, conversationHistory = []) {
+export async function askGrok(userMessage, conversationHistory = [], customApiKey = null) {
+  const activeKey = customApiKey || RUNTIME_API_KEY;
+
   // 1. Check and execute any direct device control actions
   const executedActions = await handleUserActionIntents(userMessage);
 
@@ -306,19 +523,19 @@ export async function askGrok(userMessage, conversationHistory = []) {
   const systemPrompt = buildSystemPrompt(snapshot, weather, executedActions);
 
   // If no API key configured, use the smart local engine
-  if (!API_KEY) {
-    const answer = localSmartAnswer(userMessage, snapshot, weather, executedActions);
+  if (!activeKey) {
+    const answer = await localSmartAnswer(userMessage, snapshot, weather, executedActions);
     return {
       reply: answer,
       message: answer,
       content: answer,
       contextSnapshot: snapshot,
       executedActions,
-      source: 'orbit-ai'
+      source: 'orbit-ai-local'
     };
   }
 
-  // Format messages
+  // Format messages for Cloud LLM
   const cleanHistory = (conversationHistory || []).slice(-8).map(m => ({
     role: m.role === 'assistant' ? 'assistant' : 'user',
     content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
@@ -330,7 +547,9 @@ export async function askGrok(userMessage, conversationHistory = []) {
     { role: 'user', content: userMessage }
   ];
 
-  // Try each model in sequence
+  let keyError = null;
+
+  // Try cloud models
   for (const model of FALLBACK_MODELS) {
     try {
       const response = await axios.post(
@@ -338,21 +557,20 @@ export async function askGrok(userMessage, conversationHistory = []) {
         {
           model,
           messages,
-          temperature: 0.3,
-          max_tokens: 450
+          temperature: 0.4,
+          max_tokens: 900
         },
         {
           headers: {
-            'Authorization': `Bearer ${API_KEY}`,
+            'Authorization': `Bearer ${activeKey}`,
             'Content-Type': 'application/json'
           },
-          timeout: 8000
+          timeout: 9000
         }
       );
 
       let aiMessage = response.data?.choices?.[0]?.message?.content;
       if (aiMessage) {
-        // Strip any raw reasoning tags
         aiMessage = aiMessage.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
         return {
@@ -361,31 +579,36 @@ export async function askGrok(userMessage, conversationHistory = []) {
           content: aiMessage,
           contextSnapshot: snapshot,
           executedActions,
-          source: 'orbit-ai',
+          source: 'orbit-ai-cloud',
           model
         };
       }
     } catch (error) {
-      console.warn(`[OrbitAI] Model "${model}" failed (${error.response?.data?.error?.message || error.message}), trying next model...`);
+      const errMsg = error.response?.data?.error?.message || error.message;
+      if (error.response?.status === 401 || (errMsg && errMsg.toLowerCase().includes('invalid api key'))) {
+        keyError = 'Invalid or expired API Key';
+        console.warn(`[OrbitAI] Cloud API Key is invalid or expired: ${errMsg}. Transitioning to Knowledge Engine.`);
+        break; // don't try other models with the same invalid key
+      }
+      console.warn(`[OrbitAI] Model "${model}" failed (${errMsg}), trying next model...`);
     }
   }
 
-  // If all online models fail, use the local telemetry smart answer
-  console.warn('[OrbitAI] All online models failed or timed out, using local fallback.');
-  const fallbackAnswer = localSmartAnswer(userMessage, snapshot, weather, executedActions);
+  // If Cloud LLM failed, use the Knowledge & Telemetry Engine
+  const fallbackAnswer = await localSmartAnswer(userMessage, snapshot, weather, executedActions, keyError);
   return {
     reply: fallbackAnswer,
     message: fallbackAnswer,
     content: fallbackAnswer,
     contextSnapshot: snapshot,
     executedActions,
-    source: 'orbit-ai'
+    source: 'orbit-ai-local',
+    notice: keyError ? 'Cloud AI key invalid; answered via Knowledge Engine' : undefined
   };
 }
 
 /**
  * AI-Powered Thermal Hazard Diagnostic Engine (Groq LLM + Heuristics)
- * Evaluates whether temperature rise is a normal transient spike (1-2 intervals) or an urgent fire/overheat hazard.
  */
 export async function diagnoseThermalHazard(payload = {}) {
   const {
@@ -399,7 +622,6 @@ export async function diagnoseThermalHazard(payload = {}) {
     light1 = false
   } = payload;
 
-  // Local Rule-Based Diagnostic Baseline
   let riskLevel = 'LOW';
   let category = 'NORMAL_TRANSIENT';
   let probability = 6;
@@ -420,8 +642,8 @@ export async function diagnoseThermalHazard(payload = {}) {
     recommendation = 'Check room ventilation and active heat-generating devices. Light 1 cooling indicator is active. Ensure thermal limits are not breached.';
   }
 
-  // If online Groq key available, enhance with LLM cognitive reasoning
-  if (API_KEY) {
+  // If cloud key available, enhance with LLM cognitive reasoning
+  if (RUNTIME_API_KEY) {
     const prompt = `You are ORBIT AI Thermal Safety Specialist.
 Analyze the following real-time IoT sensor telemetry:
 - Current Room Temperature: ${temperature}°C
@@ -432,11 +654,6 @@ Analyze the following real-time IoT sensor telemetry:
 - Safe Mode (Master Switch Locked): ${safeMode ? 'YES' : 'NO'}
 - Light 1 (Cooling Indicator): ${light1 ? 'ON' : 'OFF'}
 - Rule Diagnostic Baseline: Category=${category}, Risk=${riskLevel}
-
-Distinguish whether this temperature rise is:
-A) A NORMAL TRANSIENT RISE (e.g. 1-2 intervals rise due to sunlight, door opened, cooking nearby, normal drift)
-B) SUSTAINED APPLIANCE OVERHEAT (e.g. 3+ intervals steady warming, heater left on)
-C) URGENT FIRE / THERMAL RUNAWAY HAZARD (e.g. 4+ intervals continuous steep surge, extreme heat >38°C, rapid humidity drop)
 
 Respond ONLY with valid JSON in this exact structure:
 {
@@ -460,8 +677,8 @@ Respond ONLY with valid JSON in this exact structure:
             response_format: { type: 'json_object' }
           },
           {
-            headers: { 'Authorization': `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
-            timeout: 6000
+            headers: { 'Authorization': `Bearer ${RUNTIME_API_KEY}`, 'Content-Type': 'application/json' },
+            timeout: 5000
           }
         );
 
@@ -477,7 +694,7 @@ Respond ONLY with valid JSON in this exact structure:
           };
         }
       } catch (e) {
-        console.warn(`[ThermalDiagnostics] Groq model "${model}" failed, using next/fallback:`, e.message);
+        // Fall back to heuristic
       }
     }
   }
@@ -495,8 +712,7 @@ Respond ONLY with valid JSON in this exact structure:
 }
 
 /**
- * AI Spike Predictor & Risk Analyzer (Past Trajectory + Future Forecast + Fire Risk)
- * Analyzes an individual spike anomaly event using Groq LLM.
+ * AI Spike Predictor & Risk Analyzer
  */
 export async function analyzeSpecificSpike(payload = {}) {
   const {
@@ -514,7 +730,6 @@ export async function analyzeSpecificSpike(payload = {}) {
   const unit = spike.unit || (sensorType === 'humidity' ? '%' : '°C');
   const timeStr = spike.timeStr || 'Recent';
 
-  // Heuristic baseline calculations
   const isTemp = sensorType === 'temperature';
   const isHum = sensorType === 'humidity';
   const isSurge = direction === 'Surge' || delta > 0;
@@ -552,65 +767,6 @@ export async function analyzeSpecificSpike(payload = {}) {
     safetyAdvice = isSurge && currentVal > 80 ? 'Check for steam, boiling water, or moisture ingress.' : 'Humidity shift is transient and non-hazardous.';
   }
 
-  // LLM Query via Groq Cloud
-  if (API_KEY) {
-    const prompt = `You are ORBIT AI Real-Time IoT Anomaly & Fire Safety Diagnostic Engine.
-Analyze this specific sensor anomaly event:
-- Sensor: ${label} (${sensorType})
-- Event: ${direction} of ${delta > 0 ? '+' : ''}${delta}${unit} (${prevVal}${unit} → ${currentVal}${unit}) at ${timeStr}
-- Current Telemetry State: Room Temp=${telemetry.temperature ?? 'N/A'}°C, Humidity=${telemetry.humidity ?? 'N/A'}%, Safe Mode=${telemetry.safeMode ? 'LOCKED' : 'OFF'}, Light 1=${telemetry.light1 ? 'ON' : 'OFF'}
-
-Explain:
-1. Past Trajectory (Why this spike likely happened based on environmental context)
-2. Risk & Fire Hazard Assessment (Fire risk % and severity level)
-3. Future Forecast (What will happen in next 5-15 minutes if trend continues vs dissipates)
-4. Homeowner Actionable Safety Advice
-
-Respond ONLY with valid JSON in this exact structure:
-{
-  "riskLevel": "LOW" | "MODERATE" | "HIGH" | "CRITICAL",
-  "fireProbability": number (0 to 100),
-  "hazardClassification": "FIRE_HAZARD" | "APPLIANCE_THERMAL_STRESS" | "RAPID_COOLING" | "HUMIDITY_FLUX" | "BENIGN_TRANSIENT",
-  "pastAnalysis": "concise explanation of precursor and immediate trigger",
-  "futureForecast": "projected 5-15 min thermal / environmental outcome",
-  "safetyAdvice": "clear actionable instruction for the user"
-}`;
-
-    for (const model of FALLBACK_MODELS) {
-      try {
-        const response = await axios.post(
-          API_URL,
-          {
-            model,
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.2,
-            max_tokens: 350,
-            response_format: { type: 'json_object' }
-          },
-          {
-            headers: { 'Authorization': `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
-            timeout: 7000
-          }
-        );
-
-        let content = response.data?.choices?.[0]?.message?.content;
-        if (content) {
-          content = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-          const parsed = JSON.parse(content);
-          return {
-            ...parsed,
-            spikeId: spike.id,
-            source: 'orbit-ai-groq',
-            model,
-            analyzedAt: new Date().toISOString()
-          };
-        }
-      } catch (e) {
-        console.warn(`[SpikeAnalysis] Groq model "${model}" failed, using fallback:`, e.message);
-      }
-    }
-  }
-
   return {
     riskLevel,
     fireProbability,
@@ -623,3 +779,4 @@ Respond ONLY with valid JSON in this exact structure:
     analyzedAt: new Date().toISOString()
   };
 }
+

@@ -17,9 +17,10 @@ import {
   Thermometer,
   Battery,
   Clock,
-  Activity
+  Activity,
+  Key
 } from 'lucide-react';
-import { sendChatMessage } from '../services/api';
+import { sendChatMessage, saveAiApiKey } from '../services/api';
 
 /**
  * Lightweight Markdown Formatter component for clean, rich message rendering
@@ -106,7 +107,7 @@ export default function ChatbotPage({ telemetry = {} }) {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      content: `👋 Hello! I am **Orbit AI**, your smart home assistant.\n\nI have real-time awareness of your connected IoT devices and sensor readings:\n- 🌡️ Room Temperature: **${telemetry.temperature !== null ? `${telemetry.temperature}°C` : 'Reading...'}**\n- 🖥️ Hub Temperature: **${telemetry.hubTemp !== null ? `${telemetry.hubTemp}°C` : 'Reading...'}**\n- 🔋 Battery Level: **${telemetry.battery !== null ? `${telemetry.battery}%` : 'Reading...'}**\n- 🔒 Safe Mode: **${telemetry.safeMode ? 'LOCKED' : 'OFF'}**\n\nHow can I help you today? Try typing *"Turn on Light 1"*, *"What is the temperature?"*, or *"Check system health"*.`,
+      content: `👋 Hello! I am **Orbit AI**, your smart home and knowledge assistant.\n\nI have live direct access to your connected IoT devices and knowledge engine:\n- 🌡️ Room Temperature: **${telemetry.temperature !== null ? `${telemetry.temperature}°C` : 'Reading...'}**\n- 🖥️ Hub Temperature: **${telemetry.hubTemp !== null ? `${telemetry.hubTemp}°C` : 'Reading...'}**\n- 🔋 Battery Level: **${telemetry.battery !== null ? `${telemetry.battery}%` : 'Reading...'}**\n- 🔒 Safe Mode: **${telemetry.safeMode ? 'LOCKED' : 'OFF'}**\n\nAsk me anything! Try *"How to make biryani"*, *"Will it rain today?"*, *"Turn on Light 1"*, or *"Check system health"*.`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       source: 'Orbit Engine'
     }
@@ -116,15 +117,20 @@ export default function ChatbotPage({ telemetry = {} }) {
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [customKey, setCustomKey] = useState(localStorage.getItem('orbit_ai_key') || '');
+  const [showKeyInput, setShowKeyInput] = useState(false);
+  const [keySaved, setKeySaved] = useState(false);
   const messagesEndRef = useRef(null);
 
   const quickActions = [
-    { label: 'Room Temperature', icon: <Thermometer size={14} />, query: 'What is the current room temperature?' },
-    { label: 'Turn On Light 1', icon: <Lightbulb size={14} />, query: 'Turn on Light 1' },
-    { label: 'Turn Off Light 1', icon: <Lightbulb size={14} />, query: 'Turn off Light 1' },
-    { label: 'Battery Status', icon: <Battery size={14} />, query: 'Check battery level and voltage' },
-    { label: 'Safe Mode Status', icon: <Shield size={14} />, query: 'Is Safe Mode currently active?' },
-    { label: 'System Health', icon: <Activity size={14} />, query: 'Give me a full diagnostic snapshot of the system' }
+    { label: '🍛 Biryani Recipe', icon: <Sparkles size={14} />, query: 'how to make biryani' },
+    { label: '🌧️ Rain Forecast', icon: <Sparkles size={14} />, query: 'will it rain today' },
+    { label: '🌡️ Room Temp', icon: <Thermometer size={14} />, query: 'What is the current room temperature?' },
+    { label: '🖥️ Hub Temp', icon: <Thermometer size={14} />, query: 'What is the hub temperature?' },
+    { label: '💡 Turn On Light 1', icon: <Lightbulb size={14} />, query: 'Turn on Light 1' },
+    { label: '🔋 Battery Status', icon: <Battery size={14} />, query: 'Check battery level and voltage' },
+    { label: '🔒 Safe Mode', icon: <Shield size={14} />, query: 'Is Safe Mode currently active?' },
+    { label: '📊 System Health', icon: <Activity size={14} />, query: 'Show overall home status summary' }
   ];
 
   const scrollToBottom = () => {
@@ -175,7 +181,7 @@ export default function ChatbotPage({ telemetry = {} }) {
         content: m.content
       }));
 
-      const data = await sendChatMessage(textToSend.trim(), historyPayload);
+      const data = await sendChatMessage(textToSend.trim(), historyPayload, customKey || undefined);
 
       const replyText = data.reply || data.message || data.content || (typeof data === 'string' ? data : 'No response received.');
 
@@ -208,6 +214,13 @@ export default function ChatbotPage({ telemetry = {} }) {
     navigator.clipboard.writeText(text);
     setCopiedIndex(index);
     setTimeout(() => setCopiedIndex(null), 2000);
+  };
+
+  const handleSaveKey = async () => {
+    localStorage.setItem('orbit_ai_key', customKey.trim());
+    await saveAiApiKey(customKey.trim());
+    setKeySaved(true);
+    setTimeout(() => setKeySaved(false), 2500);
   };
 
   const handleClear = () => {
@@ -254,6 +267,16 @@ export default function ChatbotPage({ telemetry = {} }) {
         <div className="chatbot-actions-row">
           <button
             type="button"
+            className={`chatbot-action-btn ${showKeyInput ? 'active' : ''}`}
+            onClick={() => setShowKeyInput(!showKeyInput)}
+            title="Configure Cloud AI API Key"
+          >
+            <Key size={14} />
+            <span>API Key</span>
+          </button>
+
+          <button
+            type="button"
             className={`chatbot-action-btn ${ttsEnabled ? 'active' : ''}`}
             onClick={() => {
               if (isSpeaking) {
@@ -280,6 +303,61 @@ export default function ChatbotPage({ telemetry = {} }) {
           </button>
         </div>
       </div>
+
+      {/* Cloud AI Key Drawer */}
+      {showKeyInput && (
+        <div style={{
+          background: '#f8fafc',
+          padding: '12px 18px',
+          borderRadius: '12px',
+          border: '1px solid #e2e8f0',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          flexWrap: 'wrap',
+          boxShadow: '0 2px 6px rgba(0,0,0,0.03)'
+        }}>
+          <Key size={16} color="#6e00fa" />
+          <span style={{ fontSize: '13px', fontWeight: 600, color: '#4a5568' }}>
+            Cloud AI Key:
+          </span>
+          <input
+            type="password"
+            placeholder="Enter Groq API Key (gsk_...)"
+            value={customKey}
+            onChange={(e) => setCustomKey(e.target.value)}
+            style={{
+              flex: 1,
+              minWidth: '220px',
+              padding: '7px 12px',
+              borderRadius: '8px',
+              border: '1px solid #cbd5e0',
+              fontSize: '13px',
+              outline: 'none'
+            }}
+          />
+          <button
+            type="button"
+            onClick={handleSaveKey}
+            style={{
+              background: keySaved ? '#38a169' : '#6e00fa',
+              color: 'white',
+              border: 'none',
+              padding: '7px 16px',
+              borderRadius: '8px',
+              fontSize: '13px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }}
+          >
+            {keySaved ? 'Saved! ✓' : 'Save Key'}
+          </button>
+          <span style={{ fontSize: '11px', color: '#718096' }}>
+            Free keys available at <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" style={{ color: '#6e00fa' }}>console.groq.com</a>
+          </span>
+        </div>
+      )}
 
       {/* Main Chat Window */}
       <div className="card chat-window-card">
